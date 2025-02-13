@@ -9,6 +9,8 @@ import azure.functions as func
 import os
 import uuid
 
+from motor.motor_asyncio import AsyncIOMotorClient
+
 fast_app = FastAPI()
 #CORS 문제 해결
 fast_app.add_middleware(
@@ -22,6 +24,10 @@ pubsub_client = WebPubSubServiceClient(endpoint=os.environ['PUBSUB_CONNECTION_UR
                                        hub=os.environ['PUBSUB_HUB'], 
                                        credential=AzureKeyCredential(os.environ['PUBSUB_KEY']))
 
+#DB 연결
+db_client = AsyncIOMotorClient(os.environ['DB_CONNECTION_URL'])
+db = db_client["mygpt"]
+
 # 채널 id 가져오기
 @fast_app.get("/channel-id")
 async def get_channel_id():
@@ -31,7 +37,9 @@ async def get_channel_id():
 # 질문 전송
 @fast_app.post("/question")
 async def send_qusetion(request: QuestionRequest):
-    return request
+    # DB에 저장
+    result = await db.messages.insert_one({"channel_id": request.channel_id, "content": request.content})
+    return str(result.inserted_id)
 
 # 토큰 발급
 @fast_app.get("/pubsub/token")
