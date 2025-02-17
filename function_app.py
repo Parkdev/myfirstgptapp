@@ -1,15 +1,19 @@
+# func host start --port 7071 (f5 실행시)
+
 from fastapi import FastAPI
 from dto.question import QuestionRequest
+from fastapi.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from azure.messaging.webpubsubservice.aio import WebPubSubServiceClient
 from azure.core.credentials import AzureKeyCredential
-from fastapi.middleware.cors import CORSMiddleware
-
 import azure.functions as func
+from azure.servicebus.aio import ServiceBusClient
+from azure.servicebus import ServiceBusMessage
+
+import json
 import os
 import uuid
-
-from motor.motor_asyncio import AsyncIOMotorClient
 
 fast_app = FastAPI()
 #CORS 문제 해결
@@ -20,9 +24,14 @@ fast_app.add_middleware(
     allow_headers=["*"],
 )
 app = func.AsgiFunctionApp(app=fast_app , http_auth_level=func.AuthLevel.ANONYMOUS )
+
+#펍섭 클라이언트 생성
 pubsub_client = WebPubSubServiceClient(endpoint=os.environ['PUBSUB_CONNECTION_URL'], 
                                        hub=os.environ['PUBSUB_HUB'], 
                                        credential=AzureKeyCredential(os.environ['PUBSUB_KEY']))
+
+# 메세지 큐 연결
+servicebus_client = ServiceBusClient.from_connection_string(conn_str=os.environ['SERVICEBUS_CONNECTION_URL'], logging_enable=True)
 
 #DB 연결
 db_client = AsyncIOMotorClient(os.environ['DB_CONNECTION_URL'])
@@ -37,8 +46,24 @@ async def get_channel_id():
 # 질문 전송
 @fast_app.post("/question")
 async def send_qusetion(request: QuestionRequest):
+
+    question_data = {
+        "channel_id": request.channel_id,
+        "content": request.content,
+        "type" : "question"
+    }
     # DB에 저장
-    result = await db.messages.insert_one({"channel_id": request.channel_id, "content": request.content})
+    result = await db.messages.insert_one(question_data)
+    # db에 저장하는순간 _id가 생김 (json 형식) 전체 json dump를 위해 텍스트로 전환
+    question_data['_id'] = str(question_data['_id'])
+
+    # 메세지 큐에 전송
+    async with servicebus_client:
+        sender = servicebus_client.get_queue_sender(queue_name="process-request-queue")
+        async with sender:
+            message = ServiceBusMessage(json.dumps(question_data))
+            await sender.send_messages(message)
+
     return str(result.inserted_id)
 
 # 토큰 발급

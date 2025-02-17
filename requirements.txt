@@ -7,3 +7,5 @@ fastapi
 uvicorn[standard]
 azure-messaging-webpubsubservice
 aiohttp
+azure-servicebus
+motor
